@@ -91,7 +91,7 @@ export type RootState = {
   setSize: (width: number, height: number) => void
   setDpr: (dpr: Dpr) => void
   setFrameloop: (frameloop?: 'always' | 'demand' | 'never') => void
-  onPointerMissed?: (event: MouseEvent) => void
+  onPointerMissed?: (event: ThreeEvent<MouseEvent>) => void
 
   events: EventManager<any>
   internal: InternalState

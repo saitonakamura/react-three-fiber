@@ -52,7 +52,7 @@ export type EventHandlers = {
   onPointerEnter?: (event: ThreeEvent<PointerEvent>) => void
   onPointerLeave?: (event: ThreeEvent<PointerEvent>) => void
   onPointerMove?: (event: ThreeEvent<PointerEvent>) => void
-  onPointerMissed?: (event: MouseEvent) => void
+  onPointerMissed?: (event: ThreeEvent<MouseEvent>) => void
   onPointerCancel?: (event: ThreeEvent<PointerEvent>) => void
   onWheel?: (event: ThreeEvent<WheelEvent>) => void
 }
@@ -189,6 +189,41 @@ export function createEvents(store: UseStore<RootState>) {
     return intersections
   }
 
+  function constructEvent<P extends Record<string, unknown>>(
+    event: DomEvent,
+    hit: Intersection | null,
+    intersections: Intersection[],
+    properties: P,
+  ) {
+    const { raycaster, mouse, camera } = store.getState()
+
+    const unprojectedPoint = temp.set(mouse.x, mouse.y, 0).unproject(camera)
+    // Add native event props
+    let extractEventProps: any = {}
+    for (let prop in Object.getPrototypeOf(event)) {
+      let property = event[prop as keyof DomEvent]
+      // Only copy over atomics, leave functions alone as these should be
+      // called as event.nativeEvent.fn()
+      if (typeof property !== 'function') extractEventProps[prop] = property
+    }
+
+    let raycastEvent = {
+      ...hit,
+      ...extractEventProps,
+      spaceX: mouse.x,
+      spaceY: mouse.y,
+      intersections,
+      unprojectedPoint,
+      ray: raycaster.ray,
+      camera: camera,
+      sourceEvent: event, // deprecated
+      nativeEvent: event,
+      ...properties,
+    }
+
+    return raycastEvent
+  }
+
   /**  Handles intersections by forwarding them to handlers */
   function handleIntersects(
     intersections: Intersection[],
@@ -196,11 +231,9 @@ export function createEvents(store: UseStore<RootState>) {
     delta: number,
     callback: (event: ThreeEvent<DomEvent>) => void,
   ) {
-    const { raycaster, mouse, camera, internal } = store.getState()
+    const { internal } = store.getState()
     // If anything has been found, forward it to the event listeners
     if (intersections.length) {
-      const unprojectedPoint = temp.set(mouse.x, mouse.y, 0).unproject(camera)
-
       const localState = { stopped: false }
 
       for (const hit of intersections) {
@@ -239,17 +272,9 @@ export function createEvents(store: UseStore<RootState>) {
           if (typeof property !== 'function') extractEventProps[prop] = property
         }
 
-        let raycastEvent: any = {
-          ...hit,
-          ...extractEventProps,
-          spaceX: mouse.x,
-          spaceY: mouse.y,
-          intersections,
-          stopped: localState.stopped,
+        let raycastEvent = constructEvent(event, hit, intersections, {
           delta,
-          unprojectedPoint,
-          ray: raycaster.ray,
-          camera: camera,
+          stopped: localState.stopped,
           // Hijack stopPropagation, which just sets a flag
           stopPropagation: () => {
             // https://github.com/pmndrs/react-three-fiber/issues/596
@@ -279,9 +304,7 @@ export function createEvents(store: UseStore<RootState>) {
           // there should be a distinction between target and currentTarget
           target: { hasPointerCapture, setPointerCapture, releasePointerCapture },
           currentTarget: { hasPointerCapture, setPointerCapture, releasePointerCapture },
-          sourceEvent: event, // deprecated
-          nativeEvent: event,
-        }
+        })
 
         // Call subscribers
         callback(raycastEvent)
@@ -362,8 +385,8 @@ export function createEvents(store: UseStore<RootState>) {
       // Missed events have to come first in order to establish user-land side-effect clean up
       if (isClickEvent && !hits.length) {
         if (delta <= 2) {
-          pointerMissed(event, internal.interaction)
-          if (onPointerMissed) onPointerMissed(event)
+          pointerMissed(constructEvent(event, null, [], { delta }), internal.interaction)
+          if (onPointerMissed) onPointerMissed(event as ThreeEvent<PointerEvent>)
         }
       }
       // Take care of unhover
@@ -403,7 +426,7 @@ export function createEvents(store: UseStore<RootState>) {
             if (!isClickEvent || internal.initialHits.includes(eventObject)) {
               // Missed events have to come first
               pointerMissed(
-                event,
+                data as ThreeEvent<MouseEvent>,
                 internal.interaction.filter((object) => !internal.initialHits.includes(object)),
               )
               // Now call the handler
@@ -423,10 +446,8 @@ export function createEvents(store: UseStore<RootState>) {
     }
   }
 
-  function pointerMissed(event: MouseEvent, objects: THREE.Object3D[]) {
-    objects.forEach((object: THREE.Object3D) =>
-      (object as unknown as Instance).__r3f?.handlers.onPointerMissed?.(event),
-    )
+  function pointerMissed(event: ThreeEvent<MouseEvent>, objects: THREE.Object3D[]) {
+    objects.forEach((object: THREE.Object3D) => (object as unknown as Instance).__r3f.handlers.onPointerMissed?.(event))
   }
 
   return { handlePointer }
